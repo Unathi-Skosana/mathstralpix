@@ -1,0 +1,4 @@
+pillow==10.2.0
+mistralai==0.0.11
+python-dotenv==1.0.1
+pnglatex==1.1 
