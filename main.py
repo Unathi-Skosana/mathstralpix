@@ -5,7 +5,8 @@
 #     "pillow",   # For image handling
 #     "mistralai",  # Mistral AI client
 #     "python-dotenv",  # For environment variables
-#     "pnglatex",  # For rendering LaTeX to PNG
+#     "pylatexenc",  # For LaTeX to unicode conversion
+#     "kivy",  # For modern UI
 # ]
 # ///
 import os
@@ -13,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 import base64
@@ -20,7 +22,25 @@ import base64
 from dotenv import load_dotenv
 from mistralai import Mistral
 from PIL import Image
-from pnglatex import pnglatex
+
+# Kivy imports
+os.environ['KIVY_NO_CONSOLELOG'] = '1'  # Reduce console output
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.uix.image import Image as KivyImage
+from kivy.uix.popup import Popup
+from kivy.core.clipboard import Clipboard
+from kivy.core.window import Window
+from kivy.clock import Clock
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
+from kivy.properties import StringProperty, ObjectProperty, BooleanProperty
+
+# Define the directory for saving LaTeX renders
+LATEX_RENDERS_DIR = Path.home() / "pix" / "latex-renders"
 
 def encode_image_to_base64(image_path: str) -> str:
     """
@@ -105,9 +125,6 @@ def process_image(image_path: str) -> str:
             return ("Error: Mistral OCR currently only supports HTTPS URLs. "
                    "Please use an image hosting service and provide a direct HTTPS URL to the image.")
         return f"Error processing image: {error_msg}" 
-
-# Define the directory for saving LaTeX renders
-LATEX_RENDERS_DIR = Path.home() / "Pictures" / "latex-renders"
 
 def send_notification(title: str, message: str, urgency: str = "normal"):
     """
@@ -206,41 +223,362 @@ def looks_like_latex(text: str) -> bool:
     # Check if any pattern matches
     return any(re.search(pattern, text) for pattern in latex_patterns)
 
-def render_latex(text: str) -> Path:
+def sanitize_latex(text: str) -> str:
     """
-    Render LaTeX code to PNG.
+    Sanitize LaTeX input to prevent common rendering errors.
     
     Args:
-        text: LaTeX code to render
+        text: Raw LaTeX text
         
     Returns:
-        Path: Path to the rendered PNG file, or None if rendering failed
+        str: Sanitized LaTeX text
     """
-    try:
-        # Create output directory if it doesn't exist
-        LATEX_RENDERS_DIR.mkdir(parents=True, exist_ok=True)
+    # Remove any document environments
+    text = re.sub(r'\\begin{document}.*?\\end{document}', '', text, flags=re.DOTALL)
+    text = re.sub(r'\\documentclass.*?\n', '', text)
+    
+    # Remove any standalone \begin{document} or \end{document}
+    text = re.sub(r'\\begin{document}', '', text)
+    text = re.sub(r'\\end{document}', '', text)
+    
+    # Replace aligned environment with align environment
+    text = re.sub(r'\\begin{aligned}', r'\\begin{align}', text)
+    text = re.sub(r'\\end{aligned}', r'\\end{align}', text)
+    
+    # Ensure math environments are properly closed
+    environments = ['align', 'equation', 'matrix', 'bmatrix', 'cases']
+    for env in environments:
+        # Count occurrences of \begin and \end for this environment
+        begins = len(re.findall(fr'\\begin{{{env}}}', text))
+        ends = len(re.findall(fr'\\end{{{env}}}', text))
         
-        # Create a filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = LATEX_RENDERS_DIR / f"latex_render_{timestamp}.png"
+        # If there are unmatched environments, remove them
+        if begins != ends:
+            text = re.sub(fr'\\begin{{{env}}}|\\end{{{env}}}', '', text)
+    
+    # Clean up any leftover newlines and spaces
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    return text
+
+class LatexEditorApp(App):
+    """
+    Kivy application for LaTeX equation editing and rendering
+    """
+    def __init__(self, latex_text="", **kwargs):
+        super(LatexEditorApp, self).__init__(**kwargs)
+        self.latex_text = sanitize_latex(latex_text)
+        self.output_file = None
+        self.result_callback = None
         
-        # Ensure the text is properly wrapped in math mode if it isn't already
-        if not any(text.strip().startswith(p) for p in [r'\[', '$$', '$']):
-            text = r'\[' + text + r'\]'
+    def set_callback(self, callback):
+        """Set a callback function to run when closing"""
+        self.result_callback = callback
+    
+    def build(self):
+        self.title = 'LaTeX Equation Editor'
+        Window.size = (900, 700)
+        Window.minimum_width, Window.minimum_height = 600, 500
         
-        # Render the LaTeX code
-        output_path = pnglatex(text, str(output_file))
-        print(f"\nLaTeX render saved to: {output_path}")
-        return output_path if output_path.exists() else None
+        # Main layout
+        layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
-    except Exception as e:
-        print(f"Error rendering LaTeX: {e}")
-        send_notification(
-            "LaTeX Rendering Failed",
-            f"Error rendering LaTeX: {e}",
-            "critical"
-        )
-        return None
+        # Editor section
+        editor_layout = BoxLayout(orientation='vertical', size_hint=(1, 0.5))
+        editor_layout.add_widget(Label(text='LaTeX Equation Editor',
+                                       size_hint=(1, 0.1),
+                                       font_size='18sp',
+                                       halign='left'))
+        
+        # Clean the LaTeX for editing
+        edited_text = self.latex_text
+        if edited_text.startswith('$$') and edited_text.endswith('$$'):
+            edited_text = edited_text[2:-2].strip()
+        elif edited_text.startswith('$') and edited_text.endswith('$'):
+            edited_text = edited_text[1:-1].strip()
+        elif edited_text.startswith(r'\[') and edited_text.endswith(r'\]'):
+            edited_text = edited_text[2:-2].strip()
+        elif edited_text.startswith(r'\(') and edited_text.endswith(r'\)'):
+            edited_text = edited_text[2:-2].strip()
+        
+        self.editor = TextInput(text=edited_text, multiline=True, 
+                               font_name='RobotoMono-Regular')
+        editor_layout.add_widget(self.editor)
+        
+        # Buttons section
+        buttons_layout = BoxLayout(orientation='horizontal', 
+                                  size_hint=(1, 0.1),
+                                  spacing=10, padding=5)
+        
+        render_btn = Button(text='Render', size_hint=(1, 1))
+        render_btn.bind(on_press=self.render_equation)
+        buttons_layout.add_widget(render_btn)
+        
+        save_btn = Button(text='Save', size_hint=(1, 1))
+        save_btn.bind(on_press=self.save_image)
+        buttons_layout.add_widget(save_btn)
+        
+        copy_btn = Button(text='Copy LaTeX', size_hint=(1, 1))
+        copy_btn.bind(on_press=self.copy_to_clipboard)
+        buttons_layout.add_widget(copy_btn)
+        
+        reset_btn = Button(text='Reset', size_hint=(1, 1))
+        reset_btn.bind(on_press=self.reset_editor)
+        buttons_layout.add_widget(reset_btn)
+        
+        close_btn = Button(text='Close', size_hint=(1, 1))
+        close_btn.bind(on_press=self.close_app)
+        buttons_layout.add_widget(close_btn)
+        
+        # Preview section
+        preview_layout = BoxLayout(orientation='vertical', size_hint=(1, 0.5))
+        preview_layout.add_widget(Label(text='LaTeX Preview',
+                                       size_hint=(1, 0.1),
+                                       font_size='18sp',
+                                       halign='left'))
+        self.preview = KivyImage(size_hint=(1, 0.9))
+        preview_layout.add_widget(self.preview)
+        
+        # Status bar
+        self.status_bar = Label(text='Ready', size_hint=(1, 0.05), 
+                               halign='left', valign='middle')
+        self.status_bar.bind(size=self.status_bar.setter('text_size'))
+        
+        # Add all sections to main layout
+        layout.add_widget(editor_layout)
+        layout.add_widget(buttons_layout)
+        layout.add_widget(preview_layout)
+        layout.add_widget(self.status_bar)
+        
+        # Auto-render on start
+        Clock.schedule_once(lambda dt: self.render_equation(None), 0.5)
+        
+        return layout
+    
+    def render_equation(self, instance):
+        """Render the LaTeX equation"""
+        self.status_bar.text = "Rendering equation..."
+        
+        # Run rendering in a separate thread to avoid blocking UI
+        threading.Thread(target=self._render_thread, daemon=True).start()
+    
+    def _render_thread(self):
+        try:
+            # Get the LaTeX code from the editor
+            latex = self.editor.text.strip()
+            
+            # Create a temporary directory for rendering
+            with tempfile.TemporaryDirectory() as tmpdir:
+                temp_dir = Path(tmpdir)
+                tex_file = temp_dir / "equation.tex"
+                
+                # Wrap in math mode if not already
+                if not any(latex.startswith(p) for p in ['$', r'\[', r'\begin{']):
+                    # Use display math mode
+                    latex_content = f"${latex}$"
+                else:
+                    latex_content = latex
+                
+                # Create a minimal LaTeX document
+                tex_content = r"""
+\documentclass[preview,border=10pt]{standalone}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{color}
+\begin{document}
+""" + latex_content + r"""
+\end{document}
+"""
+                
+                # Write the tex file
+                tex_file.write_text(tex_content)
+                
+                # Compile to PDF
+                process = subprocess.run(
+                    ['pdflatex', '-interaction=nonstopmode', str(tex_file.name)],
+                    cwd=tmpdir,
+                    capture_output=True,
+                    text=True
+                )
+                
+                if process.returncode != 0:
+                    Clock.schedule_once(
+                        lambda dt: self._update_status(
+                            f"Error rendering LaTeX: {process.stderr}"
+                        ), 0
+                    )
+                    return
+                
+                # Convert PDF to PNG for preview
+                pdf_file = temp_dir / "equation.pdf"
+                png_file = temp_dir / "equation.png"
+                
+                # Use pdftoppm for better quality
+                try:
+                    subprocess.run(
+                        ['pdftoppm', '-png', '-r', '150', str(pdf_file), 
+                         str(png_file).replace('.png', '')],
+                        check=True,
+                        capture_output=True
+                    )
+                    png_file = Path(str(png_file).replace('.png', '-1.png'))
+                except:
+                    # Fallback to convert
+                    subprocess.run(
+                        ['convert', '-density', '150', str(pdf_file), str(png_file)],
+                        check=True,
+                        capture_output=True
+                    )
+                
+                # Save to permanent location
+                if png_file.exists():
+                    # Ensure output directory exists
+                    LATEX_RENDERS_DIR.mkdir(parents=True, exist_ok=True)
+                    
+                    # Create output filename with timestamp
+                    self.output_file = LATEX_RENDERS_DIR / f"latex_render_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    
+                    # Copy to permanent location
+                    with open(png_file, 'rb') as src_file:
+                        with open(self.output_file, 'wb') as dst_file:
+                            dst_file.write(src_file.read())
+                    
+                    # Update UI with the new image (must be done on main thread)
+                    Clock.schedule_once(
+                        lambda dt: self._update_preview(str(self.output_file)), 0
+                    )
+                    
+                    Clock.schedule_once(
+                        lambda dt: self._update_status(
+                            f"Rendered equation saved to {self.output_file}"
+                        ), 0
+                    )
+                else:
+                    Clock.schedule_once(
+                        lambda dt: self._update_status(
+                            "Error: Could not generate preview image"
+                        ), 0
+                    )
+        
+        except Exception as e:
+            Clock.schedule_once(
+                lambda dt: self._update_status(f"Error: {str(e)}"), 0
+            )
+    
+    def _update_preview(self, image_path):
+        """Update the preview image (called on main thread)"""
+        self.preview.source = image_path
+        self.preview.reload()
+    
+    def _update_status(self, message):
+        """Update the status bar (called on main thread)"""
+        self.status_bar.text = message
+    
+    def save_image(self, instance):
+        """Save the rendered equation to a file"""
+        if hasattr(self, 'output_file') and self.output_file and self.output_file.exists():
+            self.status_bar.text = f"Image saved to {self.output_file}"
+            
+            # Show a popup
+            content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+            content.add_widget(Label(text=f"LaTeX render saved to:\n{self.output_file}"))
+            
+            btn = Button(text='OK', size_hint=(1, 0.3))
+            content.add_widget(btn)
+            
+            popup = Popup(title='Image Saved',
+                        content=content,
+                        size_hint=(0.8, 0.3))
+            
+            # Dismiss the popup when the button is pressed
+            btn.bind(on_press=popup.dismiss)
+            
+            popup.open()
+            
+            # Try to open the image in default viewer
+            try:
+                subprocess.run(['xdg-open', str(self.output_file)], check=False)
+            except:
+                pass
+        else:
+            self.status_bar.text = "No rendered image to save"
+            
+            # Show warning popup
+            content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+            content.add_widget(Label(text="Render the equation first"))
+            
+            btn = Button(text='OK', size_hint=(1, 0.3))
+            content.add_widget(btn)
+            
+            popup = Popup(title='Warning',
+                        content=content,
+                        size_hint=(0.6, 0.3))
+            
+            # Dismiss the popup when the button is pressed
+            btn.bind(on_press=popup.dismiss)
+            
+            popup.open()
+    
+    def copy_to_clipboard(self, instance):
+        """Copy the LaTeX to clipboard"""
+        Clipboard.copy(self.editor.text.strip())
+        self.status_bar.text = "LaTeX copied to clipboard"
+    
+    def reset_editor(self, instance):
+        """Reset the editor to the original content"""
+        # Clean the original latex for editing
+        edited_text = self.latex_text
+        if edited_text.startswith('$$') and edited_text.endswith('$$'):
+            edited_text = edited_text[2:-2].strip()
+        elif edited_text.startswith('$') and edited_text.endswith('$'):
+            edited_text = edited_text[1:-1].strip()
+        elif edited_text.startswith(r'\[') and edited_text.endswith(r'\]'):
+            edited_text = edited_text[2:-2].strip()
+        elif edited_text.startswith(r'\(') and edited_text.endswith(r'\)'):
+            edited_text = edited_text[2:-2].strip()
+            
+        self.editor.text = edited_text
+        self.status_bar.text = "Editor reset to original content"
+    
+    def close_app(self, instance):
+        """Close the application"""
+        # Call result callback if set
+        if self.result_callback:
+            self.result_callback(self.output_file)
+        
+        # Stop the app
+        self.stop()
+    
+    def on_stop(self):
+        """Called when the app is closing"""
+        # Call result callback if set and not already called
+        if self.result_callback:
+            self.result_callback(self.output_file)
+
+def launch_latex_editor(latex_text):
+    """
+    Launch the LaTeX editor as a separate process
+    
+    Args:
+        latex_text: LaTeX text to edit
+        
+    Returns:
+        Path: Path to the rendered image, or None if rendering failed
+    """
+    result_file = None
+    
+    def set_result(file_path):
+        nonlocal result_file
+        result_file = file_path
+    
+    # Create and run the Kivy app
+    app = LatexEditorApp(latex_text=latex_text)
+    app.set_callback(set_result)
+    app.run()
+    
+    return result_file
 
 def main():
     # Load environment variables
@@ -281,41 +619,46 @@ def main():
         
         # Check if the text looks like LaTeX
         if looks_like_latex(text):
-            print("\nDetected LaTeX code! Rendering...")
-            rendered_path = render_latex(text)
+            print("\nDetected LaTeX code! Opening editor...")
             
-            if rendered_path:
-                # Open the rendered image with the default image viewer
-                try:
-                    subprocess.run(['xdg-open', str(rendered_path)], check=True)
-                    print("Rendered LaTeX opened in image viewer!")
+            # Copy to clipboard
+            try:
+                subprocess.run(['xclip', '-selection', 'clipboard'], 
+                             input=text.encode(), check=True)
+            except:
+                pass
+            
+            # Launch the LaTeX editor
+            output_file = launch_latex_editor(text)
+            
+            # Check if a file was created
+            if output_file and Path(output_file).exists():
                     latex_detected = True
-                    success_msg += f"\nLaTeX rendered and saved to: {rendered_path.name}"
-                except subprocess.CalledProcessError:
-                    print("Couldn't open the rendered image. The file is saved at:", rendered_path)
-        
-        # Copy to clipboard if there's text
-        try:
-            subprocess.run(['xclip', '-selection', 'clipboard'], 
-                         input=text.encode(), 
-                         check=True)
-            print("\nText copied to clipboard!")
+                    success_msg += f"\nLaTeX rendered and saved to: {Path(output_file).name}"
+        else:
+            # Copy to clipboard if there's text but no LaTeX
+            try:
+                subprocess.run(['xclip', '-selection', 'clipboard'], 
+                            input=text.encode(), 
+                            check=True)
+                print("\nText copied to clipboard!")
+            except subprocess.CalledProcessError:
+                print("\nCouldn't copy to clipboard. Please install xclip:")
+                print("sudo apt install xclip     # For Ubuntu/Debian")
+                print("sudo pacman -S xclip       # For Arch Linux")
+                send_notification(
+                    "Clipboard Error",
+                    "Text extracted but couldn't be copied to clipboard",
+                    "critical"
+                )
             
-            # Send success notification
-            send_notification(
-                "OCR Successful",
-                success_msg,
-                "normal"
-            )
-        except subprocess.CalledProcessError:
-            print("\nCouldn't copy to clipboard. Please install xclip:")
-            print("sudo apt install xclip     # For Ubuntu/Debian")
-            print("sudo pacman -S xclip       # For Arch Linux")
-            send_notification(
-                "Clipboard Error",
-                "Text extracted but couldn't be copied to clipboard",
-                "critical"
-            )
+        # Send success notification
+        send_notification(
+            "OCR Successful",
+            success_msg,
+            "normal"
+        )
+            
     except Exception as e:
         print(f"Error: {e}")
         send_notification(

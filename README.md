@@ -6,7 +6,7 @@ A Python script that combines Flameshot's screen capture capabilities with Mistr
 
 - Screen area selection using Flameshot
 - Text extraction using Mistral OCR
-- Automatic LaTeX detection and rendering
+- Automatic LaTeX detection and rendering using Matplotlib
 - Automatic clipboard copying of extracted text
 - Saves rendered LaTeX equations as PNG files
 - Desktop notifications for success and error states
@@ -17,17 +17,18 @@ A Python script that combines Flameshot's screen capture capabilities with Mistr
 
 ```bash
 # For Ubuntu/Debian
-sudo apt install flameshot xclip texlive-full libnotify-bin
+sudo apt install flameshot xclip libnotify-bin
 
 # For Arch Linux
-sudo pacman -S flameshot xclip texlive-most libnotify
+sudo pacman -S flameshot xclip libnotify
 ```
 
 ### Python Dependencies
 
 Install the required Python packages:
+
 ```bash
-pip install pillow mistralai python-dotenv pnglatex
+pip install pillow mistralai python-dotenv matplotlib
 ```
 
 ## Setup
@@ -41,15 +42,17 @@ pip install pillow mistralai python-dotenv pnglatex
 ## Usage
 
 1. Make the script executable (optional):
+
    ```bash
    chmod +x main.py
    ```
 
 2. Run the script:
+
    ```bash
    # If made executable:
    ./main.py
-   
+
    # Or using Python directly:
    python main.py
    ```
@@ -59,7 +62,7 @@ pip install pillow mistralai python-dotenv pnglatex
    - Select the area containing text or LaTeX equations
    - The text will be extracted and copied to your clipboard
    - If LaTeX is detected:
-     - It will be rendered as a PNG image
+     - It will be rendered as a PNG image using Matplotlib
      - The image will open in your default viewer
      - The render will be saved in `~/Pictures/latex-renders/`
    - Desktop notifications will inform you of success or any errors
@@ -73,7 +76,8 @@ pip install pillow mistralai python-dotenv pnglatex
 
 - Uses Mistral AI's OCR API for text extraction
 - Integrates with Flameshot for screen capture
-- Uses pnglatex for LaTeX rendering
+- Uses Matplotlib for high-quality LaTeX rendering
 - Desktop notifications via libnotify
 - Written in Python with type hints
-- Follows modern Python practices 
+- Follows modern Python practices
+
