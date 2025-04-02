@@ -4,11 +4,10 @@ version = "0.1.0"
 description = "Smol script for OCR'ing mathematics"
 requires-python = ">=3.8"
 dependencies = [
-    "pillow", # For image handling
-    "mistralai", # Mistral AI client
-    "python-dotenv", # For environment variables
-    "pnglatex", # For rendering LaTeX to PNG
-    "kivy>=2.3.1",
+    "pillow",
+    "mistralai",
+    "python-dotenv",
+    "kivy"
 ]
 
 [tool.ruff]

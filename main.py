@@ -1,12 +1,10 @@
-#!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.8"
 # dependencies = [
-#     "pillow",   # For image handling
-#     "mistralai",  # Mistral AI client
-#     "python-dotenv",  # For environment variables
-#     "pylatexenc",  # For LaTeX to unicode conversion
-#     "kivy",  # For modern UI
+#     "pillow",
+#     "mistralai",
+#     "python-dotenv",
+#     "kivy",
 # ]
 # ///
 import os
