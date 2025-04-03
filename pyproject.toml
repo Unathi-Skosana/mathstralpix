@@ -1,5 +1,5 @@
 [project]
-name = "mistral-mathpix"
+name = "mathstralpix"
 version = "0.1.0"
 description = "Smol script for OCR'ing mathematics"
 requires-python = ">=3.8"

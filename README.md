@@ -11,6 +11,7 @@ A poor man's version of [Mathpix](https://mathpix.com/) using Mistral's OCR API.
 ## Setup
 
 1. Create a `.env` file with your Mistral API key:
+
    ```
    MISTRAL_API_KEY=your_api_key_here
    ```
@@ -19,3 +20,4 @@ A poor man's version of [Mathpix](https://mathpix.com/) using Mistral's OCR API.
    ```bash
    uv run main.py
    ```
+

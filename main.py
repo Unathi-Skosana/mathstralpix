@@ -7,6 +7,7 @@
 #     "kivy",
 # ]
 # ///
+import base64
 import os
 import re
 import subprocess
@@ -15,7 +16,6 @@ import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
-import base64
 
 from dotenv import load_dotenv
 from mistralai import Mistral
@@ -24,18 +24,15 @@ from PIL import Image
 # Kivy imports
 os.environ['KIVY_NO_CONSOLELOG'] = '1'  # Reduce console output
 from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.image import Image as KivyImage
-from kivy.uix.popup import Popup
+from kivy.clock import Clock
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
-from kivy.clock import Clock
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.gridlayout import GridLayout
-from kivy.properties import StringProperty, ObjectProperty, BooleanProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.image import Image as KivyImage
+from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
 
 # Define the directory for saving LaTeX renders
 LATEX_RENDERS_DIR = Path.home() / "pix" / "latex-renders"
@@ -460,7 +457,7 @@ class LatexEditorApp(App):
                         ), 0
                     )
         
-        except Exception as e:
+        except Exception:
             Clock.schedule_once(
                 lambda dt: self._update_status(f"Error: {str(e)}"), 0
             )
